@@ -87,7 +87,7 @@ brackets_augmented <- brackets %>%
 .select_unnest <- function(col) {
   col <- enquo(col)
   brackets_augmented %>% 
-    filter(date >= lubridate::ymd('2015-01-01')) %>% 
+    # filter(date >= lubridate::ymd('2015-01-01')) %>% 
     filter(
       liquipedia_tier %in% c(
         sprintf('%s-Tier', c('S', 'A', 'B', 'C')),
@@ -135,7 +135,6 @@ long_series <- bind_rows(
 long_series
 
 df <- long_series %>% 
-  # filter(side == 'home') %>% 
   inner_join(
     teams %>% distinct(team),
     by = 'team'
