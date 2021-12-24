@@ -154,8 +154,6 @@ df <- long_series %>%
 ns <- df %>% 
   count(id, sort = TRUE)
 ns
-# series %>% 
-#   filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major/North_America')
 
 df %>% 
   count(url, series_index) %>% 
