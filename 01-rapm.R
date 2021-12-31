@@ -1,11 +1,5 @@
 
-library(dplyr)
-library(readr)
-library(tibble)
-library(stringr)
-library(tidyr)
-library(ggplot2)
-
+source('00-setup.R')
 library(rsample)
 library(recipes)
 library(parsnip)
@@ -13,76 +7,6 @@ library(workflows)
 library(tune)
 library(dials)
 library(yardstick)
-
-library(misterchiefdata) # pak::pak('tonyelhabr/misterchiefdata')
-
-brackets <- read_halo_brackets()
-players <- read_halo_players() %>% 
-  filter(!is.na(.data$player_url)) %>% 
-  mutate(across(id, ~str_replace_all(.x, ' ', '_')))
-teams <- read_halo_teams()
-
-brackets %>% 
-  select(prize_pool) %>% 
-  mutate(
-    z = prize_pool %>% 
-      str_replace_all('(^.*\\$)(.*)(\\sUSD.*$)', '\\2') %>% 
-      str_remove_all('\\,') %>% 
-      as.integer()
-  )
-
-brackets_augmented <- brackets %>%
-  filter(tier %>% str_detect('FFA|Show Match', negate = TRUE)) %>% 
-  transmute(
-    url,
-    date = start_date,
-    ## todo: player age at time of tournament
-    game = game_version,
-    n_teams = number_of_teams,
-    log_prize = prize_pool %>% 
-      str_replace_all('(^.*\\$)(.*)(\\sUSD.*$)', '\\2') %>% 
-      str_remove_all('\\,') %>% 
-      as.integer() %>% 
-      log(),
-    is_qualifier = tier %>% str_detect('Qualifier'),
-    is_weekly = tier %>% str_detect('Weekly'),
-    tier = tier %>% str_remove_all('(Qualifier|Weekly)\\s\\(|\\)'),
-    bracket_series_results,
-    pool_series_results
-  ) %>% 
-  mutate(
-    across(tier, ~factor(.x, c('S', 'A', 'B', 'C')))
-  ) %>% 
-  filter(!is.na(log_prize))
-
-# rec_prize <- brackets_augmented %>% 
-#   recipe(log_prize ~ game + n_teams + is_qualifier + is_weekly + tier, data = .) %>% 
-#   step_impute_linear(n_teams, impute_with = all_predictors())
-# wf_prize <- workflow(
-#   rec_prize,
-#   rand_forest(mode = 'regression', engine = 'ranger')
-# )
-# fit_prize <- wf_prize %>% fit(brackets_augmented)
-# preds_prize <- fit_prize %>% 
-#   broom::augment(brackets_augmented)
-# preds_prize %>% 
-#   mutate(
-#     .resid = .pred - log_prize
-#   ) %>% 
-#   arrange(desc(abs(.resid)))
-# 
-# preds_prize %>% 
-#   ggplot() +
-#   aes(x = log_prize, y = .pred) +
-#   geom_point(aes(color = game, size = lubridate::year(date))) +
-#   geom_abline(aes(intercept = 0, slope = 1)) +
-#   coord_cartesian(xlim = c(0, 15), y = c(0, 15))
-
-series <- brackets_augmented %>% 
-  pivot_longer(
-    matches('_series_results')
-  ) %>% 
-  unnest(value)
 
 .select_series_side <- function(.side = c('home', 'away')) {
   
@@ -122,21 +46,13 @@ long_series <- bind_rows(
   filter(!(is.na(w) | is.na(l)))
 long_series
 
-long_series %>% 
-  filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major')
-long_series %>% 
-  filter(tier == 'A') %>% 
-  slice_max(date, n = 1) %>% 
-  pull(url)
-
-df <- long_series %>% 
+long_series_players <- long_series %>% 
   inner_join(
     teams %>% distinct(team),
     by = 'team'
   ) %>% 
   inner_join(
-    players %>%
-      unnest(tournaments) %>% 
+    player_tourneys %>% 
       select(id, url, continent, team),
     by = c('url', 'team')
   ) %>%
@@ -148,63 +64,67 @@ df <- long_series %>%
   ) %>% 
   select(url, series_type, series_index, continent, id, indicator, value)
 
-ns <- df %>% 
-  count(id, sort = TRUE)
-ns
 
-n_players_in_series <- df %>% 
+n_by_id <- long_series_players %>% 
+  count(id, sort = TRUE)
+n_by_id
+
+n_players_in_series <- long_series_players %>% 
   count(url, series_type, series_index)
 
 ## should at most be 8 here
 n_players_in_series %>% 
   count(n, sort = TRUE)
 
-rates <- df %>% 
-  filter(continent == 'North_America') %>% 
-  group_by(id) %>% 
-  summarize(
-    n = n(),
-    value = sum(value)
-  ) %>% 
-  ungroup() %>% 
-  mutate(rate = value / n) %>% 
-  arrange(desc(rate))
-rates
-
-df_filt <- df %>% 
-  semi_join(
-    ns %>% 
-      filter(n >= 5L),
-    by = 'id'
-  ) %>% 
+long_series_players_na <- long_series_players %>% 
   filter(continent == 'North_America')
 
-net_players_by_series <- df_filt %>% 
+compute_rates <- function(data) {
+  data %>% 
+    group_by(id) %>% 
+    summarize(
+      n = n(),
+      value = sum(value)
+    ) %>% 
+    ungroup() %>% 
+    mutate(rate = value / n) %>% 
+    arrange(desc(rate))
+}
+
+na_rates <- long_series_players_na %>% 
+  compute_rates()
+na_rates
+
+net_players_by_series <- long_series_players_na %>% 
   group_by(url, series_type, series_index) %>% 
   summarize(
-    across(indicator, sum)
+    indicator_sum = sum(indicator)
   ) %>% 
   ungroup()
 net_players_by_series
 
 ## ideally it would be 0, but otherwise, we would hope for a symmetrical distribution
-net_players %>% 
-  count(indicator_by_series)
+net_players_by_series %>% 
+  count(indicator_sum)
 
+long_series_players_net <- long_series_players_na %>% 
+  semi_join(net_players_by_series %>% filter(indicator_sum == 0))
 
+net_rates <- long_series_players_net %>% 
+  compute_rates()
 
-df_wide <- df_filt %>% 
+long_series_players_wide <- long_series_players_net %>% 
   pivot_wider(
     names_from = id,
     values_from = indicator,
     values_fill = 0L
   )
-df_wide
+long_series_players_wide
 
-## check
 extra_cols <- c('url', 'series_type', 'series_index', 'continent')
 target_col <- 'value'
-lethul <- df_wide %>% 
+## check
+lethul <- long_series_players_wide %>% 
   # select(value, LethuL) %>% 
   filter(LethuL != 0) %>% 
   # filter(value < 0) %>%
@@ -215,14 +135,13 @@ lethul <- df_wide %>%
   ) %>% 
   filter(indicator != 0)
 
-
 set.seed(42)
-split <- df_wide %>% initial_split(strata = value)
-df_trn <- split %>% training()
-df_tst <- split %>% testing()
-folds <- df_trn %>% vfold_cv(10)
+split <- long_series_players_wide %>% initial_split(strata = value)
+long_series_players_trn <- split %>% training()
+long_series_players_tst <- split %>% testing()
+folds <- long_series_players_trn %>% vfold_cv(10)
 
-rec <- df_wide %>% 
+rec <- long_series_players_wide %>% 
   recipe(value ~ .) %>% 
   step_rm(extra_cols)
 rec
@@ -234,11 +153,25 @@ ctrl <- control_grid(
   save_workflow = FALSE
 )
 
-wf_lr <- rec %>% 
+rec %>% 
   workflow(
     linear_reg()
-  )
-wf_lr %>% fit(df_trn)
+  ) %>% 
+  fit(long_series_players_trn) %>% 
+  broom::tidy() %>% 
+  ## i assume NAs are due to collinearity?
+  filter(!is.na(estimate)) %>% 
+  transmute(
+    id = term,
+    rnk = row_number(desc(estimate)),
+    prnk = percent_rank(estimate),
+    estimate
+  ) %>% 
+  arrange(desc(estimate)) %>% 
+  inner_join(net_rates) %>% 
+  ggplot() +
+  aes(x = prnk, y = value) +
+  geom_point(aes(size = n))
 
 wf_lr <- rec %>% 
   workflow(
@@ -285,8 +218,8 @@ wf_lr_fix <- rec %>%
     )
   )
 
-fit_trn_lr <- wf_lr_fix %>% fit(df_trn) # use this to evaluate validation set.
-fit_lr <- wf_lr_fix %>% fit(df_wide) # use this for true holdout data
+fit_trn_lr <- wf_lr_fix %>% fit(long_series_players_trn) # use this to evaluate validation set.
+fit_lr <- wf_lr_fix %>% fit(long_series_players_wide) # use this for true holdout data
 
 # Note that this is the same thing
 coefs_lr <- fit_lr %>% 
@@ -304,7 +237,7 @@ coefs_lr <- fit_lr %>%
 coefs_lr
 
 coefs_lr %>% 
-  inner_join(rates) %>% 
+  inner_join(net_rates) %>% 
   ggplot() +
   aes(x = prnk, y = value) +
   geom_point(aes(size = n))
