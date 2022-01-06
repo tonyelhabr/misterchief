@@ -85,7 +85,7 @@ do_elo <- function(r_0 = 1500, k = 20, xi = 20, .verbose = TRUE, path = glue::gl
     arrange(id)
   
   elos_init <- ids %>% 
-    mutate(elo = !!r_0, prev_elo = !!r_0)
+    mutate(elo = !!r_0, prev_elo = !!r_0, i = 0)
   
   .grid_filt <- .grid %>% filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major')
   # for(i in seq_len(nrow(series_players_expanded_filt))) {
@@ -98,8 +98,15 @@ do_elo <- function(r_0 = 1500, k = 20, xi = 20, .verbose = TRUE, path = glue::gl
     
     for(j in seq_len(nrow(series_players_i))) {
       # j <- 1
-      series_elos_init <- elos_init
+
       series_players_ij <- series_players_i %>% slice(j)
+      
+      series_elos_init <- elos_init %>% 
+        semi_join(series_players_ij %>% distinct(id), by = 'id') %>% 
+        group_by(id) %>% 
+        slice_max(i, n = 1) %>% 
+        ungroup()
+      
       slice_elo_id <- function(.side) {
         col <- sprintf('%s_id', .side)
         if(is.na(series_players_ij[[col]])) {
@@ -109,7 +116,7 @@ do_elo <- function(r_0 = 1500, k = 20, xi = 20, .verbose = TRUE, path = glue::gl
             prev_elo = !!r_0
           )
         } else {
-          elos_init %>% filter(id == series_players_ij[[col]])
+          series_elos_init %>% filter(id == series_players_ij[[col]])
           # ids <- series_players_i %>% distinct(!!sym(col))
         }
       }
@@ -168,6 +175,7 @@ do_elo <- function(r_0 = 1500, k = 20, xi = 20, .verbose = TRUE, path = glue::gl
         summarize(across(c(elo, prev_elo), mean)) %>% 
         ungroup()
     }
+    elos_init <- 
     
     # elos_init <- elos_init %>% 
     #   mutate(
@@ -201,6 +209,8 @@ do_elo <- function(r_0 = 1500, k = 20, xi = 20, .verbose = TRUE, path = glue::gl
     #       TRUE ~ NA_real_
     #     )
     #   )
+    elos_init <- elos_init %>% 
+      bind_rows(series_elos_i_agg)
     
     if(i == 1) {
       all_elos <- elos_init
