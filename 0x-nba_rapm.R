@@ -1,5 +1,7 @@
 
-#A https://squared2020.com/2017/09/18/deep-dive-on-regularized-adjusted-plus-minus-i-introductory-example/
+library(tidyverse)
+library(tidymodels)
+# https://squared2020.com/2017/09/18/deep-dive-on-regularized-adjusted-plus-minus-i-introductory-example/
 df <- tibble::tribble(
   ~a, ~b, ~c, ~d, ~e,  ~f,  ~g,  ~h,  ~i,  ~j, ~home, ~away, ~poss, ~netpp100,
   1L, 1L, 1L, NA, NA, -1L, -1L, -1L,  NA,  NA,   11L,    5L,   15L,        40,
@@ -19,7 +21,17 @@ df <- tibble::tribble(
     net = home - away,
     across(net, ~coalesce(.x - lag(.x), .x))
   )
-
+a <- df %>% select(a:j) %>% as.matrix()
+b <- df %>% select(netpp100) %>% as.matrix()
+new_b <- t(a) %*% b
+new_a <- t(a) %*% a
+c <- as.matrix(round(as.vector(pracma::pinv(a) %*% b), 2) - 19.75)
+c
+apm_rates <- c %>% 
+  as.vector() %>% 
+  tibble(apm_rate = .) %>% 
+  bind_cols(tibble(id = letters[1:10]), .)
+apm_rates
 rates <- df %>% 
   pivot_longer(
     -c(home:last_col()),
@@ -29,7 +41,7 @@ rates <- df %>%
   filter(indicator != 0) %>% 
   mutate(
     across(net, ~.x * indicator)
-  ) %>% 
+  ) %>%
   group_by(id) %>% 
   summarize(
     n = n(),
@@ -39,7 +51,10 @@ rates <- df %>%
   mutate(rate = (100 / poss) * net) %>% 
   arrange(id)
 rates
-
+full_join(
+  rates,
+  apm_rates
+)
 rec <- df %>% 
   recipe(netpp100 ~ .) %>% 
   # step_intercept(value = 0) %>% 
