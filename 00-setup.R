@@ -148,5 +148,135 @@ series <- brackets_augmented %>%
   unnest(value) %>% 
   .join_bracket_teams('home') %>% 
   .join_bracket_teams('away') %>% 
+  ## there's 2 series without results, causing the warnings
+  ## actually, idk why there's still warnings. these case whens capture all cases
+  mutate(
+    across(
+      c(home_w, away_w),
+      ~case_when(
+        .x == '' ~ NA_integer_,
+        .x == 'W' ~ 3L,
+        .x == 'L' | .x == 'FF' ~ 0L,
+        TRUE ~ as.integer(.x)
+      )
+    ),
+    across(series_type, ~factor(.x, c('pool', 'bracket')))
+  ) %>% 
   arrange(desc(date), series_type, series_index)
-series
+
+.grid <- series %>% 
+  distinct(url, series_type, series_index)
+
+.team_idx <- 1L:4L
+.select_series_side <- function(.side, expand = TRUE) {
+  team_col <- sprintf('%s_team', .side)
+  team_sym <- sym(team_col)
+  id_sym <- sym(sprintf('%s_id', .side))
+  place_sym <- sym(sprintf('%s_place', .side))
+  idx_col <- sprintf('%s_idx', .side)
+  idx_sym <- sym(idx_col)
+  res <- series %>% 
+    # filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
+    select(
+      url,
+      date,
+      n_teams,
+      series_type,
+      series_index,
+      home_team,
+      away_team,
+      home_w,
+      away_w
+    ) %>% 
+    left_join(
+      player_tourneys %>% 
+        select(url, !!place_sym := place, !!team_sym := team, !!id_sym := id),
+      by = c('url', team_col)
+    )
+  
+  if(!expand) {
+    return(res)
+  }
+  
+  res %>% 
+    group_by(url, series_type, series_index, !!team_sym) %>% 
+    mutate(
+      !!idx_sym := row_number(!!id_sym)
+    ) %>% 
+    ungroup() %>% 
+    right_join(
+      .grid %>% 
+        # filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
+        crossing(!!idx_sym := .team_idx),
+      by = c('url', 'series_type', 'series_index', idx_col)
+    )
+}
+
+## Don't expand so we can come up with an estimate of the team's place.
+## (The expanded df includes a lot of extra NAs that messes things up.)
+series_players <- full_join(
+  .select_series_side('home', expand = FALSE),
+  .select_series_side('away', expand = FALSE)
+)
+
+.convert_group_place <- function(x) {
+  if(is.na(x)) {
+    return(NA_real_)
+  }
+  if(!str_detect(x, '[-]')) {
+    return(as.double(x))
+  }
+  x1 <- x %>% str_remove('([-].*$)') %>% as.integer()
+  x2 <- x %>% str_remove('(^.*[-])') %>% as.integer()
+  (x1 + x2) / 2
+}
+
+emperical_places <- series_players %>% 
+  filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
+  filter(series_type == 'bracket') %>% 
+  distinct(url, series_index, n_teams, home_place, away_place, home = home_team, away = away_team) %>% 
+  pivot_longer(
+    c(home, away),
+    names_to = 'team_side',
+    values_to = 'team'
+  ) %>% 
+  rename(home = home_place, away = away_place) %>% 
+  pivot_longer(
+    c(home, away),
+    names_to = 'place_side',
+    values_to = 'place'
+  ) %>% 
+  filter(team_side == place_side) %>% 
+  distinct(url, team, place, n_teams) %>% 
+  mutate(
+    place = map_dbl(place, .convert_group_place)
+    # across(place, .convert_group_place)
+  ) %>% 
+  arrange(url, place)
+
+places <- emperical_places %>% 
+  mutate(place_is_guess = is.na(place)) %>% 
+  group_by(url) %>% 
+  mutate(
+    n_places = n(),
+    n_guess = sum(place_is_guess),
+    place_sum = sum(place, na.rm = TRUE)
+  ) %>% 
+  ungroup() %>% 
+  # nest(data = c(team, place, place_is_guess)) %>% 
+  mutate(
+    theoretical_place_sum = map_int(n_places, ~reduce(1:.x, sum))
+  ) %>% 
+  # unnest(data) %>% 
+  mutate(
+    across(
+      place,
+      ~ifelse(
+        is.na(.x),
+        (theoretical_place_sum - place_sum) / n_guess,
+        .x
+      )
+    )
+  ) %>% 
+  select(url, team, place, place_is_guess)
+

@@ -15,14 +15,14 @@ library(yardstick)
     'home' = 'away',
     'away' = 'home'
   )
-  
+ 
   series %>% 
     transmute(
       url,
       date,
       game,
       n_teams,
-      prize,
+      log_prize,
       tier,
       series_type,
       series_index,
@@ -47,6 +47,7 @@ long_series <- bind_rows(
 long_series
 
 long_series_players <- long_series %>% 
+  filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
   inner_join(
     teams %>% distinct(team),
     by = 'team'
@@ -59,8 +60,8 @@ long_series_players <- long_series %>%
   select(url, series_type, series_index, continent, side, id, series_w, w, l) %>% 
   mutate(
     value = w - l,
-    indicator = ifelse(side == 'home', 1, -1)
-    # indicator = ifelse(value > 0, 1, -1)
+    # indicator = ifelse(side == 'home', 1, -1)
+    indicator = ifelse(value > 0, 1, -1)
   ) %>% 
   select(url, series_type, series_index, continent, id, indicator, value)
 
@@ -107,8 +108,8 @@ net_players_by_series
 net_players_by_series %>% 
   count(indicator_sum)
 
-long_series_players_net <- long_series_players_na %>% 
-  semi_join(net_players_by_series %>% filter(indicator_sum == 0))
+long_series_players_net <- long_series_players_na # %>% 
+  # semi_join(net_players_by_series %>% filter(indicator_sum == 0))
 
 net_rates <- long_series_players_net %>% 
   compute_rates()
@@ -119,7 +120,6 @@ long_series_players_wide <- long_series_players_net %>%
     values_from = indicator,
     values_fill = 0L
   )
-long_series_players_wide
 
 extra_cols <- c('url', 'series_type', 'series_index', 'continent')
 target_col <- 'value'
