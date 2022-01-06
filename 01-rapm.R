@@ -15,11 +15,12 @@ library(yardstick)
     'home' = 'away',
     'away' = 'home'
   )
- 
+  
   series %>% 
     transmute(
-      url,
       date,
+      event_name,
+      url,
       game,
       n_teams,
       log_prize,
@@ -47,7 +48,7 @@ long_series <- bind_rows(
 long_series
 
 long_series_players <- long_series %>% 
-  filter(url == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
+  # filter(event_name == 'https://liquipedia.net/halo/Halo_Championship_Series/2021/Kickoff_Major') %>% 
   inner_join(
     teams %>% distinct(team),
     by = 'team'
@@ -57,27 +58,42 @@ long_series_players <- long_series %>%
       select(id, url, continent, team),
     by = c('url', 'team')
   ) %>%
-  select(url, series_type, series_index, continent, side, id, series_w, w, l) %>% 
   mutate(
     value = w - l,
     # indicator = ifelse(side == 'home', 1, -1)
     indicator = ifelse(value > 0, 1, -1)
   ) %>% 
-  select(url, series_type, series_index, continent, id, indicator, value)
-
+  select(date, event_name, series_type, series_index, continent, id, indicator, value)
 
 n_by_id <- long_series_players %>% 
   count(id, sort = TRUE)
 n_by_id
 
 n_players_in_series <- long_series_players %>% 
-  count(url, series_type, series_index)
+  count(event_name, series_type, series_index)
 
 ## should at most be 8 here
 n_players_in_series %>% 
   count(n, sort = TRUE)
 
-long_series_players_na <- long_series_players %>% 
+interesting_ids <- c(
+  'Snip3down',
+  'LethuL',
+  'aPG',
+  'iGotUrPistola',
+  'Roy',
+  'Renegade',
+  'Shotzzy',
+  'Lucid',
+  'MaNiaC',
+  'Commonly',
+  'Spartan',
+  'el_ToWn',
+  'Str8_Sick'
+)
+long_series_players_filt <- long_series_players %>% 
+  filter(id %in% interesting_ids) %>% 
+  filter(lubridate::year(date) == 2016) %>% 
   filter(continent == 'North_America')
 
 compute_rates <- function(data) {
@@ -92,12 +108,12 @@ compute_rates <- function(data) {
     arrange(desc(rate))
 }
 
-na_rates <- long_series_players_na %>% 
+rates <- long_series_players_filt %>% 
   compute_rates()
-na_rates
+rates # %>% filter(n > 50) %>% tail(20)
 
-net_players_by_series <- long_series_players_na %>% 
-  group_by(url, series_type, series_index) %>% 
+net_players_by_series <- long_series_players_filt %>% 
+  group_by(event_name, series_type, series_index) %>% 
   summarize(
     indicator_sum = sum(indicator)
   ) %>% 
@@ -108,8 +124,8 @@ net_players_by_series
 net_players_by_series %>% 
   count(indicator_sum)
 
-long_series_players_net <- long_series_players_na # %>% 
-  # semi_join(net_players_by_series %>% filter(indicator_sum == 0))
+long_series_players_net <- long_series_players_filt # %>% 
+# semi_join(net_players_by_series %>% filter(indicator_sum == 0))
 
 net_rates <- long_series_players_net %>% 
   compute_rates()
@@ -121,7 +137,7 @@ long_series_players_wide <- long_series_players_net %>%
     values_fill = 0L
   )
 
-extra_cols <- c('url', 'series_type', 'series_index', 'continent')
+extra_cols <- c('date', 'event_name', 'series_type', 'series_index', 'continent')
 target_col <- 'value'
 ## check
 lethul <- long_series_players_wide %>% 
@@ -143,7 +159,8 @@ folds <- long_series_players_trn %>% vfold_cv(10)
 
 rec <- long_series_players_wide %>% 
   recipe(value ~ .) %>% 
-  step_rm(extra_cols)
+  step_rm(extra_cols) %>% 
+  step_nzv(all_numeric_predictors())
 rec
 
 metset <- metric_set(rmse)
@@ -153,7 +170,7 @@ ctrl <- control_grid(
   save_workflow = FALSE
 )
 
-rec %>% 
+naive_estimates <- rec %>% 
   workflow(
     linear_reg()
   ) %>% 
@@ -168,7 +185,10 @@ rec %>%
     estimate
   ) %>% 
   arrange(desc(estimate)) %>% 
-  inner_join(net_rates) %>% 
+  inner_join(net_rates)
+naive_estimates
+
+naive_estimates %>%   
   ggplot() +
   aes(x = prnk, y = value) +
   geom_point(aes(size = n))
